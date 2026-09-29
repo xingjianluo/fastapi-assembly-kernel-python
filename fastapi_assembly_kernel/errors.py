@@ -45,3 +45,20 @@ class LifecycleError(KernelError):
 
 class InitializationFailedError(LifecycleError):
     """惰性初始化执行失败；清除状态后允许重试。"""
+
+
+class ShutdownError(LifecycleError):
+    """停机会话中一个或多个组件释放失败的汇总错误。
+
+    failures: 插件名 -> 释放时抛出的原始异常（按插件名排序的只读视图）。
+    即使部分组件失败，其余组件的释放也不会被跳过。
+    """
+
+    def __init__(self, message: str, *, failures: dict[str, BaseException]) -> None:
+        super().__init__(message)
+        self._failures = dict(failures)
+
+    @property
+    def failures(self) -> dict[str, BaseException]:
+        """释放失败的插件名 -> 原始异常（副本）。"""
+        return dict(self._failures)

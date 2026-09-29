@@ -14,6 +14,8 @@ def create_app(kernel: AssemblyKernel) -> FastAPI:
     """创建 FastAPI 应用并通过 lifespan 装配内核。
 
     * 应用启动时执行一次内核装配（异步入口，与同步 start 共享同一次）；
+    * 应用关闭时执行一次优雅停机（按装配逆序释放组件，与同步
+      shutdown 共享同一次，重复触发不会重复释放）；
     * 装配失败（配置错误/依赖错误/工厂失败）会让应用启动失败，
       错误以原始可区分类型向上传播，绝不静默降级；
     * 内核实例同时挂在 ``app.state.kernel`` 与进程默认槽位
@@ -29,6 +31,7 @@ def create_app(kernel: AssemblyKernel) -> FastAPI:
             yield
         finally:
             set_kernel(None)
+            await kernel.ashutdown()
 
     app = FastAPI(lifespan=lifespan)
     return app

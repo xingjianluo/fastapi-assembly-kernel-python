@@ -58,3 +58,25 @@ def test_startup_failure_propagates(case_log):
     with pytest.raises(ConfigValidationError):
         with TestClient(app):
             pass
+
+
+def test_lifespan_exit_releases_components(case_log):
+    released: list[str] = []
+    registry = PluginRegistry()
+    registry.register(PluginSpec(
+        "marker", lambda ctx: "marker-instance", frozenset(),
+        teardown=lambda inst: released.append(inst),
+    ))
+    kernel = AssemblyKernel(
+        config_loader=LayeredConfigLoader(ConfigSchema(()), []),
+        registry=registry,
+    )
+    app = create_app(kernel)
+    case_log("lifespan 停机", "TestClient 上下文退出",
+             "应用关闭时按逆序释放组件；接口行为不变，内核回到未启动状态")
+
+    with TestClient(app):
+        assert kernel.is_started()
+        assert kernel.get("marker") == "marker-instance"
+    assert released == ["marker-instance"]
+    assert not kernel.is_started()

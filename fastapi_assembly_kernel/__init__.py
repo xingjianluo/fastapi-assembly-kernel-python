@@ -1,4 +1,4 @@
-"""FastAPI 应用装配内核：分层配置 / 依赖注入式插件 / 惰性一次性初始化。"""
+"""FastAPI 应用装配内核：分层配置 / 依赖注入式插件 / 惰性初始化 / 停机与热重载。"""
 
 from .config import (
     ConfigSchema,
@@ -22,10 +22,12 @@ from .errors import (
     LifecycleError,
     MissingDependencyError,
     PluginError,
+    ShutdownError,
 )
 from .kernel import AssemblyKernel, get_kernel, set_kernel
-from .lifecycle import InitState, LazyResource
-from .registry import FactoryContext, PluginRegistry, PluginSpec
+from .lifecycle import InitState, LazyResource, SettledOnce
+from .registry import FactoryContext, PluginRegistry, PluginSpec, PluginTeardown
+from .shutdown import ShutdownSession
 
 __all__ = [
     "AssemblyKernel",
@@ -52,7 +54,11 @@ __all__ = [
     "PluginError",
     "PluginRegistry",
     "PluginSpec",
+    "PluginTeardown",
     "ResolvedConfig",
+    "SettledOnce",
+    "ShutdownError",
+    "ShutdownSession",
     "get_kernel",
     "set_kernel",
 ]

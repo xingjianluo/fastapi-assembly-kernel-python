@@ -22,7 +22,7 @@ from .errors import InitializationFailedError
 
 T = TypeVar("T")
 
-__all__ = ["LazyResource", "InitState"]
+__all__ = ["LazyResource", "InitState", "SettledOnce"]
 
 
 class InitState:
@@ -129,3 +129,50 @@ class LazyResource(Generic[T]):
     def is_ready(self) -> bool:
         with self._cond:
             return self._state == InitState.READY
+
+
+class SettledOnce:
+    """只执行一次的收尾原语（用于停机释放）。
+
+    与 :class:`LazyResource` 的差别：失败后**不重试**。无论并发还是
+    先后调用，动作至多执行一次，所有调用方共享同一个结果——
+    成功则全部返回，失败则全部收到同一个异常实例。
+    """
+
+    def __init__(self, action: Callable[[], None], *, name: str = "settled") -> None:
+        if not callable(action):
+            raise ValueError("action 必须可调用")
+        self._action = action
+        self._name = name
+        self._cond = threading.Condition()
+        self._running = False
+        self._done = False
+        self._error: BaseException | None = None
+
+    def run(self) -> None:
+        """执行（或等待/共享）唯一一次动作。"""
+        with self._cond:
+            while self._running:
+                self._cond.wait()
+            if self._done:
+                if self._error is not None:
+                    raise self._error
+                return
+            self._running = True
+        try:
+            self._action()
+        except BaseException as exc:
+            with self._cond:
+                self._running = False
+                self._done = True
+                self._error = exc
+                self._cond.notify_all()
+            raise
+        with self._cond:
+            self._running = False
+            self._done = True
+            self._cond.notify_all()
+
+    def is_done(self) -> bool:
+        with self._cond:
+            return self._done

@@ -4,16 +4,20 @@
 
 - **分层配置**：多来源加载与确定性合并，非法配置以可区分错误暴露，敏感值不泄漏；
 - **依赖注入式插件装配**：声明依赖、自动拓扑排序，重复/缺失/循环依赖被明确拒绝；
-- **并发安全的惰性一次性初始化**：多入口并发触发只初始化一次，失败可安全重试。
+- **并发安全的惰性一次性初始化**：多入口并发触发只初始化一次，失败可安全重试；
+- **运行期配置热重载**：不停机按既有优先级整体切换配置，失败保持原样；
+- **优雅停机与安全重启**：按装配逆序释放组件、只释放一次、失败可区分汇总，
+  停机后可在同进程内用最新配置重新拉起。
 
 ```
 fastapi_assembly_kernel/
-├── errors.py      # 可区分异常体系
+├── errors.py      # 可区分异常体系（含 ShutdownError 汇总）
 ├── config.py      # 分层配置：来源、优先级合并、类型校验、脱敏
-├── registry.py    # 插件注册与确定性依赖解析
-├── lifecycle.py   # 惰性一次性初始化原语（线程 + asyncio）
-├── kernel.py      # AssemblyKernel：配置 + 插件 + 惰性启动
-└── app.py         # FastAPI lifespan 集成
+├── registry.py    # 插件注册与确定性依赖解析（PluginSpec 可声明 teardown）
+├── lifecycle.py   # 惰性一次性初始化原语 + SettledOnce 收尾原语
+├── shutdown.py    # ShutdownSession：装配逆序的确定性释放
+├── kernel.py      # AssemblyKernel：配置 + 插件 + 启动/停机/重启/热重载
+└── app.py         # FastAPI lifespan 集成（启动装配、关闭释放）
 main.py            # 最小应用入口（GET / 行为保持不变）
 tests/             # 单元测试（日志中打印输入与判定依据）
 ```
@@ -108,22 +112,83 @@ registry.register(PluginSpec("svc", svc_factory, depends_on=frozenset({"db"})))
 - **安全重试**：失败后状态收敛为 `FAILED`、半成品引用被丢弃，
   下一次 `start()`/`get()` 从头完整重试，不会残留部分状态。
 
-## 4. FastAPI 集成
+## 4. 运行期配置热重载
+
+应用启动后调用 `kernel.reload_config()`（异步入口
+`await kernel.areload_config()`），按第 1 节同一套来源与优先级规则
+重新解析并校验全部来源：
+
+- **整体切换**：只有所有来源都解析、校验通过，才把当前配置原子替换为
+  新快照；任何一个来源缺失（`ConfigSourceMissingError`）、格式非法
+  （`ConfigSourceFormatError`）或字段类型不匹配
+  （`ConfigValidationError`），当前正在使用的配置**原封不动**，
+  错误以原有可区分类型抛出，且异常与日志中不含敏感值；
+- **并发快照一致**：`kernel.config` 读到的一直是某一份完整快照——
+  要么切换前、要么切换后，不会读到半新半旧，也不会出现空配置或
+  悄悄退回默认值；重载前拿到的旧快照对象本身永不被篡改；
+- 热重载只替换配置快照，不重建插件实例；需要让插件吃到新配置时
+  使用第 6 节的重启。
+
+## 5. 优雅停机与资源释放
+
+`PluginSpec` 新增可选的 `teardown` 钩子（签名：`(实例) -> None`）：
+
+```python
+registry.register(PluginSpec(
+    "db", db_factory, teardown=lambda conn: conn.close(),
+))
+```
+
+`kernel.shutdown()`（异步入口 `await kernel.ashutdown()`）的规则：
+
+- **逆序释放**：释放顺序 = 装配拓扑序的逆序——依赖别人的组件先释放，
+  被别人依赖的组件后释放；顺序由依赖图唯一确定，
+  不受注册或遍历顺序影响；未声明 `teardown` 的组件直接跳过；
+- **只释放一次**：多个线程/协程同时触发停机，释放动作只执行一次，
+  其余调用方等待并共享同一个结果（含失败）；停机后的重复调用
+  也只重放同一结果，不会重复释放；
+- **失败不扩散**：某个组件释放失败不会中断或跳过其余组件的释放；
+  全部尝试完成后抛 `ShutdownError`，其 `failures` 属性按插件名
+  给出每个失败组件的原始异常，可逐个区分处理；
+- 与装配并发时，停机会等待进行中的装配落定后再释放，
+  已构建的组件不会被遗漏。
+
+## 6. 停机后安全重启
+
+停机后同一进程内可再次 `start()`/`get()`，或直接调用
+`kernel.restart()`（= 优雅停机 + 用最新配置重新装配）：
+
+- **最新配置**：重启时重新走一遍分层加载，用的是当时的最新配置；
+- **无残留**：每次"启动到停机"是一代（generation），重启在全新一代上
+  装配，上一代的实例、配置快照与半成品引用一概不保留；
+- **并发安全**：重启过程中调用 `get`/`start`/`config` 的调用方，
+  要么拿到重启前或重启后某一代的完整状态，要么收到失败，
+  绝不观察到中间态；
+- 若停机阶段有组件释放失败，`restart()` 会把 `ShutdownError`
+  原样传播且不触发重新装配；显式再调 `start()` 仍可在新一代拉起。
+
+## 7. FastAPI 集成
 
 ```python
 from fastapi_assembly_kernel import AssemblyKernel, ...
 from fastapi_assembly_kernel.app import create_app
 
 kernel = AssemblyKernel(config_loader=loader, registry=registry)
-app = create_app(kernel)   # lifespan 中执行一次装配
+app = create_app(kernel)   # lifespan 中执行一次装配；关闭时执行一次优雅停机
 ```
 
 - 装配失败会让应用启动失败，错误以原始可区分类型向上传播；
+- 应用关闭（lifespan 退出）时自动执行一次 `ashutdown()`，
+  按第 5 节规则释放组件；
 - 内核挂在 `app.state.kernel`，也可通过
   `fastapi_assembly_kernel.get_kernel` 作为 FastAPI 依赖注入；
 - `main.py` 保留原有最小接口：`GET /` 仍返回 `{"Hello": "World"}`。
 
-## 5. 本地验证
+**兼容范围**：分层配置规则、依赖装配顺序、惰性一次性初始化与失败重试
+语义、`GET /` 最小接口行为均与之前版本完全一致；`PluginSpec` 的
+`teardown` 为可选参数，不声明即视为无需释放，既有声明无需修改。
+
+## 8. 本地验证
 
 ```bash
 uv sync                 # 安装依赖（含 dev 组 pytest/httpx）
@@ -136,4 +201,8 @@ uv run uvicorn main:app --reload   # 本地启动
 测试覆盖：配置优先级冲突、非法配置（缺失/格式/类型/未知字段/必需缺失）、
 敏感值脱敏、重复注册、缺失依赖、循环依赖、大规模依赖图确定性、
 多线程与 asyncio 并发一次性初始化、失败广播与安全重试、
-工厂失败无半装配状态、FastAPI 最小接口兼容。
+工厂失败无半装配状态、FastAPI 最小接口兼容；
+以及新增的热重载整体切换与失败保持原样、并发读写快照一致性、
+敏感值不进重载错误、停机逆序释放与注册顺序无关、并发停机只释放一次、
+释放失败汇总且不重试、停机后重启用最新配置且无残留、
+重启期间并发访问只见完整状态。
