@@ -45,3 +45,23 @@ class LifecycleError(KernelError):
 
 class InitializationFailedError(LifecycleError):
     """惰性初始化执行失败；清除状态后允许重试。"""
+
+
+class KernelNotRunningError(LifecycleError):
+    """在内核未处于运行状态时执行了仅运行期可用的操作（如配置热重载）。"""
+
+
+class ShutdownError(LifecycleError):
+    """优雅停机期间一个或多个组件释放失败。
+
+    释放按逆装配顺序全部尝试（失败不跳过其他组件），
+    本异常在停机结束时汇总抛出；``failures`` 记录
+    ``{插件名: 原始异常}``，便于逐个区分处理。
+    """
+
+    def __init__(self, failures: dict[str, BaseException]) -> None:
+        self.failures: dict[str, BaseException] = dict(failures)
+        detail = ", ".join(
+            f"{name}({type(exc).__name__})" for name, exc in sorted(self.failures.items())
+        )
+        super().__init__(f"停机期间 {len(self.failures)} 个组件释放失败: {detail}")

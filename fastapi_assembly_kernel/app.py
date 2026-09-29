@@ -29,6 +29,9 @@ def create_app(kernel: AssemblyKernel) -> FastAPI:
             yield
         finally:
             set_kernel(None)
+            # 应用关闭时优雅停机：逆装配顺序释放组件，仅释放一次；
+            # 释放失败以 ShutdownError 向上传播（含逐组件明细）
+            await kernel.astop()
 
     app = FastAPI(lifespan=lifespan)
     return app

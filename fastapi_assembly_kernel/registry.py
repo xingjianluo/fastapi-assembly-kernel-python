@@ -33,6 +33,9 @@ __all__ = [
 # 工厂签名：(装配上下文) -> 组件实例
 PluginFactory = Callable[["FactoryContext"], Any]
 
+# 释放钩子签名：(组件实例) -> None；在停机时按逆装配顺序调用
+TeardownHook = Callable[[Any], None]
+
 
 @dataclass(frozen=True)
 class FactoryContext:
@@ -59,17 +62,24 @@ class FactoryContext:
 
 @dataclass(frozen=True)
 class PluginSpec:
-    """插件声明：名称、依赖名称集合与工厂。"""
+    """插件声明：名称、依赖名称集合、工厂与可选的释放钩子。
+
+    teardown 在优雅停机时以组件实例为参数被调用，
+    调用顺序为装配顺序的严格逆序（先装配的后释放）。
+    """
 
     name: str
     factory: PluginFactory
     depends_on: frozenset[str] = frozenset()
+    teardown: TeardownHook | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("插件名必须是非空字符串")
         if not callable(self.factory):
             raise ValueError(f"插件 {self.name!r} 的 factory 必须可调用")
+        if self.teardown is not None and not callable(self.teardown):
+            raise ValueError(f"插件 {self.name!r} 的 teardown 必须可调用或为 None")
         deps = frozenset(self.depends_on)
         if not all(isinstance(d, str) and d for d in deps):
             raise ValueError(f"插件 {self.name!r} 的依赖名必须是非空字符串")

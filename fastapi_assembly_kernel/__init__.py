@@ -19,11 +19,13 @@ from .errors import (
     DuplicatePluginError,
     InitializationFailedError,
     KernelError,
+    KernelNotRunningError,
     LifecycleError,
     MissingDependencyError,
     PluginError,
+    ShutdownError,
 )
-from .kernel import AssemblyKernel, get_kernel, set_kernel
+from .kernel import AssemblyKernel, KernelState, get_kernel, set_kernel
 from .lifecycle import InitState, LazyResource
 from .registry import FactoryContext, PluginRegistry, PluginSpec
 
@@ -44,6 +46,8 @@ __all__ = [
     "InitState",
     "InitializationFailedError",
     "KernelError",
+    "KernelNotRunningError",
+    "KernelState",
     "LayeredConfigLoader",
     "LazyResource",
     "LifecycleError",
@@ -53,6 +57,7 @@ __all__ = [
     "PluginRegistry",
     "PluginSpec",
     "ResolvedConfig",
+    "ShutdownError",
     "get_kernel",
     "set_kernel",
 ]

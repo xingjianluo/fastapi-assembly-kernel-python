@@ -58,3 +58,27 @@ def test_startup_failure_propagates(case_log):
     with pytest.raises(ConfigValidationError):
         with TestClient(app):
             pass
+
+
+def test_lifespan_shutdown_releases_components(case_log):
+    case_log("lifespan 优雅停机", "TestClient 退出上下文",
+             "应用关闭时按逆装配顺序释放组件且仅释放一次，内核回到未启动状态")
+    released: list[str] = []
+    registry = PluginRegistry()
+    registry.register(
+        PluginSpec("db", lambda ctx: "db-instance",
+                   teardown=lambda i: released.append("db"))
+    )
+    registry.register(
+        PluginSpec("svc", lambda ctx: "svc-instance", frozenset({"db"}),
+                   teardown=lambda i: released.append("svc"))
+    )
+    kernel = AssemblyKernel(
+        config_loader=LayeredConfigLoader(ConfigSchema(()), []),
+        registry=registry,
+    )
+    app = create_app(kernel)
+    with TestClient(app):
+        assert kernel.is_started()
+    assert released == ["svc", "db"]
+    assert not kernel.is_started()
