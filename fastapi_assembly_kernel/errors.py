@@ -57,6 +57,11 @@ class ShutdownError(LifecycleError):
     释放按逆装配顺序全部尝试（失败不跳过其他组件），
     本异常在停机结束时汇总抛出；``failures`` 记录
     ``{插件名: 原始异常}``，便于逐个区分处理。
+
+    同一轮停机的发起方与所有并入方拿到的是同一个异常对象。
+    汇总消息只包含插件名与异常类型名，不含异常文本——teardown
+    抛出的原始异常消息可能携带密钥等敏感内容；原始异常仍完整
+    保留在 ``failures`` 中供进程内代码判定。
     """
 
     def __init__(self, failures: dict[str, BaseException]) -> None:
